@@ -9,6 +9,7 @@ import (
 	"time"
 	"video-compress/internal/compressor"
 	"video-compress/internal/config"
+	"video-compress/internal/ffmpeg" // [新增] 引入 ffmpeg 包以构建命令预览
 
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/pflag"
@@ -59,20 +60,33 @@ func main() {
 	fmt.Printf("目标架构: Apple Silicon M2 Max\n")
 	fmt.Printf("待处理文件: %d 个 (总时长: %.1f 小时)\n", len(jobs), totalDuration/3600)
 	fmt.Printf("并发线程数: %d\n", cfg.Workers)
+
+	// [新增] 打印 FFmpeg 命令预览 (基于第一个任务生成)
+	// 这有助于用户验证实际使用的参数 (如 CRF/Quality, 编码器等)
+	if len(jobs) > 0 {
+		sampleCmd := ffmpeg.BuildArgs(jobs[0].InputFile, jobs[0].OutputFile, cfg)
+		fmt.Printf("执行命令: ffmpeg %s\n", strings.Join(sampleCmd, " "))
+	}
+
 	fmt.Println("------------------------------------------------")
 
+	// [优化] 更改进度条样式为高亮方块形式
 	bar := progressbar.NewOptions64(
 		int64(totalDuration*1000000),
 		progressbar.OptionSetDescription("总体进度"),
 		progressbar.OptionSetWriter(os.Stderr),
-		progressbar.OptionSetWidth(15),
+		progressbar.OptionSetWidth(20), // 稍微加宽一点
 		progressbar.OptionThrottle(100*time.Millisecond),
 		progressbar.OptionShowCount(),
 		progressbar.OptionOnCompletion(func() { fmt.Fprint(os.Stderr, "\n") }),
 		progressbar.OptionSpinnerType(14),
 		progressbar.OptionFullWidth(),
 		progressbar.OptionSetTheme(progressbar.Theme{
-			Saucer: "=", SaucerHead: ">", SaucerPadding: " ", BarStart: "[", BarEnd: "]",
+			Saucer:        "█", // 已完成部分 (实心方块)
+			SaucerHead:    "█", // 头部
+			SaucerPadding: "░", // 未完成部分 (虚影方块)
+			BarStart:      "[",
+			BarEnd:        "]",
 		}),
 	)
 	_ = bar.RenderBlank()
