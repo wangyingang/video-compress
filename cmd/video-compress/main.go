@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"text/tabwriter"
+
+	// "text/tabwriter" // [已移除] 不再需要表格库
 	"time"
 	"video-compress/internal/compressor"
 	"video-compress/internal/config"
@@ -29,7 +30,6 @@ func main() {
 	pflag.Parse()
 
 	if len(pflag.Args()) == 0 {
-		// [修改] 更新帮助信息中的命令名称为 vc
 		fmt.Println("Usage: vc <input_file_or_dir> [flags]")
 		pflag.PrintDefaults()
 		os.Exit(1)
@@ -117,15 +117,11 @@ func main() {
 	fmt.Printf("\n✅ 所有任务完成! 总耗时: %s\n", time.Since(start).Round(time.Second))
 }
 
-// printReport 打印任务总结表格
+// printReport 打印任务总结报告 (列表模式)
+// [修改] 改为列表展示，以便完整显示长文件名和命令
 func printReport(processed, ignored []compressor.ReportItem) {
 	fmt.Println("\n📊 任务处理报告")
-	fmt.Println("====================================================================================================")
-
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-
-	// 打印表头
-	fmt.Fprintln(w, "文件名\t状态\t原始大小\t压缩后大小\t减少量\t减少%\t备注/命令 (部分)")
+	fmt.Println("================================================================================")
 
 	formatSize := func(b int64) string {
 		const unit = 1024
@@ -140,49 +136,62 @@ func printReport(processed, ignored []compressor.ReportItem) {
 		return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 	}
 
-	// 打印处理过的文件
+	totalCount := len(processed) + len(ignored)
+	index := 1
+
+	// 1. 打印处理过的文件
 	for _, item := range processed {
+		// 显示完整文件名，不进行截断
 		name := filepath.Base(item.InputFile)
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
+
+		fmt.Printf("[%d/%d] 文件: %s\n", index, totalCount, name)
 
 		if item.Status == "Failed" {
-			fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t-\t❌ %s\n", name, "失败", item.Reason)
-			continue
-		}
+			fmt.Printf("    🔴 状态: 失败\n")
+			fmt.Printf("    ❌ 原因: %s\n", item.Reason)
+		} else {
+			reduction := item.OriginalSize - item.NewSize
+			percent := 0.0
+			if item.OriginalSize > 0 {
+				percent = (float64(reduction) / float64(item.OriginalSize)) * 100
+			}
 
-		reduction := item.OriginalSize - item.NewSize
-		percent := 0.0
-		if item.OriginalSize > 0 {
-			percent = (float64(reduction) / float64(item.OriginalSize)) * 100
+			fmt.Printf("    ✅ 状态: 完成\n")
+			fmt.Printf("    📉 数据: %s -> %s (减少: %s / %.1f%%)\n",
+				formatSize(item.OriginalSize),
+				formatSize(item.NewSize),
+				formatSize(reduction),
+				percent,
+			)
+			// 显示完整命令
+			fmt.Printf("    🛠  命令: %s\n", item.Command)
 		}
-
-		cmdShort := item.Command
-		if len(cmdShort) > 40 {
-			cmdShort = cmdShort[:37] + "..."
-		}
-
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%.1f%%\t%s\n",
-			name,
-			"✅ 完成",
-			formatSize(item.OriginalSize),
-			formatSize(item.NewSize),
-			formatSize(reduction),
-			percent,
-			cmdShort,
-		)
+		fmt.Println("--------------------------------------------------------------------------------")
+		index++
 	}
 
-	// 打印被忽略的文件
+	// 2. 打印被忽略的文件
 	for _, item := range ignored {
 		name := filepath.Base(item.InputFile)
-		if len(name) > 20 {
-			name = name[:17] + "..."
-		}
-		fmt.Fprintf(w, "%s\t%s\t-\t-\t-\t-\t⚠️ %s\n", name, "跳过", item.Reason)
+		fmt.Printf("[%d/%d] 文件: %s\n", index, totalCount, name)
+		fmt.Printf("    ⚠️ 状态: 跳过\n")
+		fmt.Printf("    📝 原因: %s\n", item.Reason)
+		fmt.Println("--------------------------------------------------------------------------------")
+		index++
 	}
 
-	w.Flush()
-	fmt.Println("====================================================================================================")
+	// 3. 统计汇总
+	successCount := 0
+	failCount := 0
+	for _, p := range processed {
+		if p.Status == "Processed" {
+			successCount++
+		} else {
+			failCount++
+		}
+	}
+
+	fmt.Printf("统计: 总计 %d | 成功 %d | 失败 %d | 跳过 %d\n",
+		totalCount, successCount, failCount, len(ignored))
+	fmt.Println("================================================================================")
 }
