@@ -1,6 +1,7 @@
 package compressor
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,6 +43,9 @@ func ScanJobs(cfg config.Config) ([]Job, []ReportItem, float64, error) {
 	var ignored []ReportItem
 	var totalDuration float64
 
+	// 用于读取用户输入
+	reader := bufio.NewReader(os.Stdin)
+
 	getOutputPath := func(input string) string {
 		ext := filepath.Ext(input)
 		name := strings.TrimSuffix(filepath.Base(input), ext)
@@ -67,6 +71,24 @@ func ScanJobs(cfg config.Config) ([]Job, []ReportItem, float64, error) {
 			return nil
 		}
 
+		// [新增功能] 检查输出文件是否存在并提示
+		outputFile := getOutputPath(path)
+		if _, err := os.Stat(outputFile); err == nil {
+			fmt.Printf("\n⚠️  目标文件已存在: %s\n", outputFile)
+			fmt.Print("❓ 是否覆盖? (y/N): ")
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(strings.ToLower(input))
+
+			if input != "y" && input != "yes" {
+				ignored = append(ignored, ReportItem{
+					InputFile: path,
+					Status:    "Ignored",
+					Reason:    "目标文件已存在 (用户选择跳过)",
+				})
+				return nil
+			}
+		}
+
 		dur, err := utils.GetVideoDuration(path)
 		if err != nil {
 			fmt.Printf("⚠️ 警告: 无法读取文件信息，跳过: %s\n", filepath.Base(path))
@@ -79,7 +101,7 @@ func ScanJobs(cfg config.Config) ([]Job, []ReportItem, float64, error) {
 		}
 		jobs = append(jobs, Job{
 			InputFile:   path,
-			OutputFile:  getOutputPath(path),
+			OutputFile:  outputFile,
 			DurationSec: dur,
 		})
 		totalDuration += dur
