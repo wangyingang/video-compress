@@ -1,5 +1,5 @@
 # 项目名称
-BINARY_NAME=video-compress
+BINARY_NAME=vc
 # 主文件路径
 MAIN_PATH=cmd/video-compress/main.go
 # 编译输出目录
@@ -34,7 +34,7 @@ clean:
 	@go clean
 	@echo "Clean complete."
 
-# 安装到系统路径 (需 sudo)
+# 安装到系统路径 (需 sudo 或确保 ~/bin 在 PATH 中)
 install: build-mac
 # 	@echo "Installing to /usr/local/bin..."
 # 	@mv $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/
