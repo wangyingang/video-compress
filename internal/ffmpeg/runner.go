@@ -2,6 +2,9 @@ package ffmpeg
 
 import (
 	"bufio"
+	"bytes"
+	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -12,14 +15,25 @@ import (
 
 // BuildArgs 构建 FFmpeg 参数
 func BuildArgs(inputFile, outputFile string, cfg config.Config) []string {
-	args := []string{
-		"-y", "-hwaccel", "videotoolbox", "-i", inputFile,
+	// 1. 基础参数
+	args := []string{"-y"}
+
+	// 2. 硬件加速策略
+	// 尝试启用 videotoolbox 硬件解码。
+	// 注意：对于某些损坏严重的视频，FFmpeg 可能会自动回退到 h264(native) 软件解码，
+	// 因此后续的滤镜链必须能同时处理硬件和软件两种输出。
+	args = append(args, "-hwaccel", "videotoolbox")
+
+	// 3. 通用输入参数
+	args = append(args,
+		"-i", inputFile,
 		"-progress", "pipe:1", "-nostats", "-hide_banner",
 		"-map_metadata", "0", "-movflags", "+faststart",
-	}
+		"-ignore_unknown",           // 忽略无效流
+		"-err_detect", "ignore_err", // [新增] 遇到数据损坏时尝试继续，而不是立即崩溃
+	)
 
-	// 设置压缩质量，standard下为50,low为40,high采用软件压缩，并通过一个简单的换算法将
-	// q:v 值转为crf值，具体如下
+	// 计算质量参数
 	qValue := "50"
 	if cfg.Quality > 0 {
 		qValue = strconv.Itoa(cfg.Quality)
@@ -29,8 +43,10 @@ func BuildArgs(inputFile, outputFile string, cfg config.Config) []string {
 		qValue = "50"
 	}
 
+	// 4. 视频编码配置
 	switch cfg.Preset {
 	case config.PresetHigh:
+		// [High 模式] 混合流水线 (兼容模式)
 		crf := "24"
 		if cfg.Quality > 0 {
 			mappedCRF := 51 - (cfg.Quality / 2)
@@ -40,30 +56,46 @@ func BuildArgs(inputFile, outputFile string, cfg config.Config) []string {
 			crf = strconv.Itoa(mappedCRF)
 		}
 		args = append(args,
-			"-c:v", "libx265", "-crf", crf, "-preset", "medium",
-			"-pix_fmt", "yuv420p10le", "-tag:v", "hvc1",
-			"-c:a", "aac", "-b:a", "128k",
+			"-c:v", "libx265",
+			"-crf", crf,
+			"-preset", "medium",
+			// [关键修改]
+			// 移除 hwdownload，仅使用 format=yuv420p。
+			// 原因：如果硬件解码失败回退到软件解码(nv12)，显式的 hwdownload 会导致崩溃。
+			// format=yuv420p 更加智能：
+			// 1. 若是硬件流，它会自动插入下载步骤。
+			// 2. 若是软件流，它直接转换格式。
+			"-vf", "format=yuv420p",
+			"-tag:v", "hvc1",
 		)
 	case config.PresetLow:
 		args = append(args,
 			"-c:v", "hevc_videotoolbox", "-q:v", qValue,
 			"-profile:v", "main10", "-tag:v", "hvc1", "-pix_fmt", "p010le",
-			"-c:a", "aac", "-b:a", "96k",
 		)
 	default:
+		// Standard 模式
 		args = append(args,
 			"-c:v", "hevc_videotoolbox", "-q:v", qValue,
 			"-profile:v", "main10", "-tag:v", "hvc1", "-pix_fmt", "p010le",
-			"-c:a", "aac", "-b:a", "128k",
 		)
 	}
+
+	// 5. 音频处理
+	// 统一使用流复制，避免解码错误并保持原音质
+	args = append(args, "-c:a", "copy")
+
 	args = append(args, outputFile)
 	return args
 }
 
-// Run 执行 FFmpeg 命令并更新进度条
+// Run 执行 FFmpeg 命令并更新进度条 (保持不变)
 func Run(cmdArgs []string, globalBar *progressbar.ProgressBar) error {
 	cmd := exec.Command("ffmpeg", cmdArgs...)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -88,5 +120,10 @@ func Run(cmdArgs []string, globalBar *progressbar.ProgressBar) error {
 			}
 		}
 	}
-	return cmd.Wait()
+
+	if err := cmd.Wait(); err != nil {
+		fmt.Fprintf(os.Stderr, "\n\n❌ FFmpeg 运行错误日志:\n%s\n", stderr.String())
+		return err
+	}
+	return nil
 }
