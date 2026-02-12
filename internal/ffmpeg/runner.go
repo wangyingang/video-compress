@@ -3,6 +3,8 @@ package ffmpeg
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,9 +91,67 @@ func BuildArgs(inputFile, outputFile string, cfg config.Config) []string {
 	return args
 }
 
+// BuildSegmentArgs 构建单个时间分片的压缩参数
+func BuildSegmentArgs(inputFile, outputFile string, cfg config.Config, startSec, durationSec float64) []string {
+	args := []string{"-y"}
+	args = append(args, "-hwaccel", "videotoolbox")
+	args = append(args,
+		"-ss", fmt.Sprintf("%.3f", startSec),
+		"-t", fmt.Sprintf("%.3f", durationSec),
+		"-i", inputFile,
+		"-progress", "pipe:1", "-nostats", "-hide_banner",
+		"-map_metadata", "0", "-movflags", "+faststart",
+		"-ignore_unknown",
+		"-err_detect", "ignore_err",
+	)
+
+	qValue := "50"
+	if cfg.Quality > 0 {
+		qValue = strconv.Itoa(cfg.Quality)
+	} else if cfg.Preset == config.PresetLow {
+		qValue = "40"
+	} else if cfg.Preset == config.PresetStandard {
+		qValue = "50"
+	}
+
+	switch cfg.Preset {
+	case config.PresetHigh:
+		crf := "24"
+		if cfg.Quality > 0 {
+			mappedCRF := 51 - (cfg.Quality / 2)
+			if mappedCRF < 0 {
+				mappedCRF = 0
+			}
+			crf = strconv.Itoa(mappedCRF)
+		}
+		args = append(args,
+			"-c:v", "libx265",
+			"-crf", crf,
+			"-preset", "medium",
+			"-vf", "format=yuv420p",
+			"-tag:v", "hvc1",
+		)
+	case config.PresetLow:
+		args = append(args,
+			"-c:v", "hevc_videotoolbox", "-q:v", qValue,
+			"-profile:v", "main10", "-tag:v", "hvc1", "-pix_fmt", "p010le",
+		)
+	default:
+		args = append(args,
+			"-c:v", "hevc_videotoolbox", "-q:v", qValue,
+			"-profile:v", "main10", "-tag:v", "hvc1", "-pix_fmt", "p010le",
+		)
+	}
+
+	// 分片模式统一重编码音频，保证分片拼接兼容性与时间连续性
+	args = append(args, "-c:a", "aac", "-b:a", "160k")
+	args = append(args, outputFile)
+	return args
+}
+
 // Run 执行 FFmpeg 命令并更新进度条 (保持不变)
-func Run(cmdArgs []string, globalBar *progressbar.ProgressBar) error {
-	cmd := exec.Command("ffmpeg", cmdArgs...)
+func Run(ctx context.Context, cmdArgs []string, globalBar *progressbar.ProgressBar) error {
+	cmd := exec.CommandContext(ctx, "ffmpeg", cmdArgs...)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -122,7 +182,35 @@ func Run(cmdArgs []string, globalBar *progressbar.ProgressBar) error {
 	}
 
 	if err := cmd.Wait(); err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
 		fmt.Fprintf(os.Stderr, "\n\n❌ FFmpeg 运行错误日志:\n%s\n", stderr.String())
+		return err
+	}
+	return nil
+}
+
+// ConcatSegments 将分片文件无损拼接为最终文件
+func ConcatSegments(ctx context.Context, listFile, outputFile string) error {
+	cmd := exec.CommandContext(ctx,
+		"ffmpeg",
+		"-y",
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listFile,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		outputFile,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return ctx.Err()
+		}
+		fmt.Fprintf(os.Stderr, "\n\n❌ FFmpeg 拼接错误日志:\n%s\n", stderr.String())
 		return err
 	}
 	return nil

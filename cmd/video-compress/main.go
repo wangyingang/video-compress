@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -22,11 +23,15 @@ func main() {
 	// 1. 参数解析
 	var outputDir, presetName string
 	var customQuality, workers int
+	var segmentSeconds int
+	var disableSegmentResume bool
 
 	pflag.StringVarP(&outputDir, "output", "o", "", "指定输出目录")
 	pflag.StringVarP(&presetName, "preset", "p", config.PresetStandard, "压缩预设: high, standard, low")
 	pflag.IntVarP(&customQuality, "quality", "q", 0, "自定义质量 (1-100)")
 	pflag.IntVarP(&workers, "workers", "w", 2, "并发处理数量")
+	pflag.IntVar(&segmentSeconds, "segment-seconds", 600, "单文件断点续传分片时长(秒)")
+	pflag.BoolVar(&disableSegmentResume, "disable-segment-resume", false, "关闭单文件分片续传")
 	pflag.Parse()
 
 	if len(pflag.Args()) == 0 {
@@ -36,16 +41,21 @@ func main() {
 	}
 
 	cfg := config.Config{
-		InputPath:  pflag.Args()[0],
-		OutputPath: outputDir,
-		Preset:     strings.ToLower(presetName),
-		Quality:    customQuality,
-		Workers:    workers,
+		InputPath:        pflag.Args()[0],
+		OutputPath:       outputDir,
+		Preset:           strings.ToLower(presetName),
+		Quality:          customQuality,
+		Workers:          workers,
+		SegmentSeconds:   segmentSeconds,
+		DisableSegResume: disableSegmentResume,
+	}
+	if cfg.SegmentSeconds <= 0 {
+		cfg.SegmentSeconds = 600
 	}
 
 	// 2. 扫描任务
 	fmt.Println("正在扫描文件并分析时长...")
-	jobs, ignoredItems, totalDuration, err := compressor.ScanJobs(cfg)
+	jobs, ignoredItems, totalDuration, resumeState, resumeStatePath, err := compressor.ScanJobs(cfg)
 	if err != nil {
 		fmt.Printf("错误: %v\n", err)
 		os.Exit(1)
@@ -98,17 +108,22 @@ func main() {
 	_ = bar.RenderBlank()
 
 	// 4. 信号监听
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		<-sig
-		fmt.Println("\n\n⚠️ 用户中断，正在退出...")
-		os.Exit(1)
+		fmt.Println("\n\n⚠️ 用户中断，正在停止当前任务并保存断点...")
+		cancel()
 	}()
 
 	// 5. 执行
 	start := time.Now()
-	processedItems := compressor.Process(jobs, cfg, bar)
+	processedItems := compressor.Process(ctx, jobs, cfg, bar, resumeState, resumeStatePath)
 	_ = bar.Finish()
 
 	// 6. 打印最终报告

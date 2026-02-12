@@ -7,9 +7,11 @@ const (
 )
 
 type Config struct {
-	InputPath  string
-	OutputPath string
-	Preset     string
-	Quality    int
-	Workers    int
+	InputPath        string
+	OutputPath       string
+	Preset           string
+	Quality          int
+	Workers          int
+	SegmentSeconds   int
+	DisableSegResume bool
 }
