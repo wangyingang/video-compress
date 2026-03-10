@@ -51,12 +51,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(ignoredItems) > 0 {
-		fmt.Printf("已忽略 %d 个不需要压缩的文件 (文件名包含 .compressed)\n", len(ignoredItems))
+	scanIgnored, scanFailed, compressedIgnored := summarizeScanItems(ignoredItems)
+	if compressedIgnored > 0 {
+		fmt.Printf("已忽略 %d 个不需要压缩的文件 (文件名包含 .compressed)\n", compressedIgnored)
+	}
+	if otherIgnored := scanIgnored - compressedIgnored; otherIgnored > 0 {
+		fmt.Printf("扫描阶段跳过 %d 个文件 (例如用户选择不覆盖已存在输出)\n", otherIgnored)
+	}
+	if scanFailed > 0 {
+		fmt.Printf("扫描阶段有 %d 个文件读取失败，详情见最终报告\n", scanFailed)
 	}
 
 	if len(jobs) == 0 {
-		fmt.Println("未找到需要处理的视频文件。")
+		if scanFailed > 0 {
+			fmt.Println("未找到可处理视频文件 (扫描阶段存在读取失败)。")
+		} else {
+			fmt.Println("未找到需要处理的视频文件。")
+		}
 		printReport(nil, ignoredItems)
 		os.Exit(0)
 	}
@@ -174,8 +185,13 @@ func printReport(processed, ignored []compressor.ReportItem) {
 	for _, item := range ignored {
 		name := filepath.Base(item.InputFile)
 		fmt.Printf("[%d/%d] 文件: %s\n", index, totalCount, name)
-		fmt.Printf("    ⚠️ 状态: 跳过\n")
-		fmt.Printf("    📝 原因: %s\n", item.Reason)
+		if item.Status == "Failed" {
+			fmt.Printf("    🔴 状态: 失败\n")
+			fmt.Printf("    ❌ 原因: %s\n", item.Reason)
+		} else {
+			fmt.Printf("    ⚠️ 状态: 跳过\n")
+			fmt.Printf("    📝 原因: %s\n", item.Reason)
+		}
 		fmt.Println("--------------------------------------------------------------------------------")
 		index++
 	}
@@ -183,6 +199,7 @@ func printReport(processed, ignored []compressor.ReportItem) {
 	// 3. 统计汇总
 	successCount := 0
 	failCount := 0
+	skipCount := 0
 	for _, p := range processed {
 		if p.Status == "Processed" {
 			successCount++
@@ -190,8 +207,29 @@ func printReport(processed, ignored []compressor.ReportItem) {
 			failCount++
 		}
 	}
+	for _, item := range ignored {
+		if item.Status == "Failed" {
+			failCount++
+		} else {
+			skipCount++
+		}
+	}
 
 	fmt.Printf("统计: 总计 %d | 成功 %d | 失败 %d | 跳过 %d\n",
-		totalCount, successCount, failCount, len(ignored))
+		totalCount, successCount, failCount, skipCount)
 	fmt.Println("================================================================================")
+}
+
+func summarizeScanItems(items []compressor.ReportItem) (ignored, failed, compressedIgnored int) {
+	for _, item := range items {
+		if item.Status == "Failed" {
+			failed++
+			continue
+		}
+		ignored++
+		if item.Reason == "Filename indicates already compressed" {
+			compressedIgnored++
+		}
+	}
+	return ignored, failed, compressedIgnored
 }
