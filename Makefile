@@ -3,7 +3,7 @@ BINARY_NAME=vc
 # 主文件路径
 MAIN_PATH=cmd/video-compress/main.go
 # 编译输出目录
-BUILD_DIR=bin
+BUILD_DIR=dist
 
 .PHONY: all build clean run install
 
@@ -38,8 +38,8 @@ clean:
 install: build-mac
 # 	@echo "Installing to /usr/local/bin..."
 # 	@mv $(BUILD_DIR)/$(BINARY_NAME) /usr/local/bin/
-	@echo "Installing to ~/bin..."
-	@mv $(BUILD_DIR)/$(BINARY_NAME) ~/bin/
+	@echo "Installing to ~/.local/bin..."
+	@mv $(BUILD_DIR)/$(BINARY_NAME) ~/.local/bin/
 	@echo "Installation complete."
 
 # 整理依赖
